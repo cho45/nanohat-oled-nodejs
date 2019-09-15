@@ -1,114 +1,15 @@
 //#!/usr/bin/env node
 
-
-const EventEmitter = require('events');
-const {Bus, Device} = require('i2c-bus-promised');
-const Canvas = require('canvas');
+const { Screen } = require('./screen.js');
 const BDFFont = require('bdf-canvas').BDFFont;
 const strftime = require('strftime');
-
-const {OLED} = require('./oled.js');
-const {GPIOEventEmitter} = require('./gpioemitter.js');
-
 const fs_ = require('fs');
 const fs = fs_.promises;
 fs.createWriteStream = fs_.createWriteStream;
-
-function wait(n) { return new Promise( (r) => setTimeout(r, n)) }
-
-const WHITE = "#ffffff";
-const BLACK = "#000000";
-
-class Screen extends EventEmitter {
-	get width() { return 128; }
-	get height() { return 64; }
-
-	constructor() {
-		super();
-		this.canvas = new Canvas(this.width, this.height);
-		this.ctx = this.canvas.getContext("2d");
-		this.ctx.fillStyle = BLACK;
-		this.ctx.fillRect(0, 0, this.width, this.height);
-		this.requests = [];
-	}
-
-	async init() {
-		this.bus = new Bus(0);
-		await this.bus.open();
-
-		this.gpioEvent = new GPIOEventEmitter();
-		const eventHandler = (e) => {
-			this.emit(e.type, e, this.ctx);
-		};
-		this.gpioEvent.on('keydown', eventHandler);
-		this.gpioEvent.on('keyup', eventHandler);
-
-		this.oled = new OLED(this.bus);
-		await this.oled.initialize();
-		await this.oled.clear();
-		this.emit("load", {}, this.ctx);
-	}
-
-	requestAnimationFrame(cb) {
-		this.requests.push(cb);
-	}
-
-	async loop() {
-		await this.init();
-		let prevImageData = null;
-		let lastRenderdTime = 0;
-		const frames = 1000/30;
-		for (;;) {
-			for (let i = 0, len = this.requests.length; i < len; i++) {
-				this.requests.shift()();
-			}
-
-			// render thread
-			const imagedata = this.ctx.getImageData(0, 0, this.width, this.height);
-			let   dirty = false;
-			if (prevImageData) {
-				const prev = prevImageData.data;
-				const next = imagedata.data;
-				const len  = next.length;
-				for (let i = 0; i < len; i++) {
-					if (prev[i] !== next[i]) {
-						dirty = true;
-						break;
-					}
-				}
-			} else {
-				dirty = true;
-			}
-			if (dirty) {
-				await this.oled.drawImage(imagedata);
-				prevImageData = imagedata;
-			}
-			const now = Date.now();
-			const w = frames - (now - lastRenderdTime);
-			if (w > 0) {
-				await wait(w);
-			}
-			lastRenderdTime = now;
-		}
-	}
-
-	clear() {
-		const ctx = this.ctx;
-		ctx.fillStyle = BLACK;
-		ctx.fillRect(0, 0, this.width, this.height);
-		ctx.fillStyle = WHITE;
-	}
-}
-Screen.getInstance = () => {
-	if (!Screen._instance) {
-		Screen._instance = new Screen();
-	}
-	return Screen._instance;
-};
+const util = require('util');
+const exec = util.promisify(require('child_process').exec);
 
 const screen = Screen.getInstance();
-
-
 
 
 function convertToBinary(ctx, x, y, w, h) {
@@ -155,7 +56,6 @@ async function loadImage(path) {
 	});
 }
 
-
 (async () => {
 	const font = new BDFFont(await fs.readFile("./mplus_f10r.bdf", "utf-8"));
 	const lines = [];
@@ -186,19 +86,18 @@ async function loadImage(path) {
 
 		screen.clear();
 		font.drawText(ctx, "init", 65, lineHeight*1-2);
-		const img = await loadImage("./foo.jpg");
-		ctx.drawImage(img, 0, 0, 64, 64);
-		const id = convertToBinary(ctx, 0, 0, 64, 64);
-		ctx.putImageData(id, 0, 0);
+//		const img = await loadImage("./foo.jpg");
+//		ctx.drawImage(img, 0, 0, 64, 64);
+//		const id = convertToBinary(ctx, 0, 0, 64, 64);
+//		ctx.putImageData(id, 0, 0);
 
-		setInterval( () => {
+		setInterval(async () => {
+			const { stdout, stderr } = await exec('ip route get 8.8.8.8');
+			const ipAddress = stdout.split(/\s+/)[6];
 			const now = new Date();
 			screen.clear();
-			ctx.save();
-			ctx.scale(2, 2);
-			font.drawText(screen.ctx, strftime("%Y-%m-%d", new Date()), 1, lineHeight*(1)-2);
-			font.drawText(screen.ctx, strftime("%H:%M:%S", new Date()), 1, lineHeight*(2)-2);
-			ctx.restore();
+			font.drawText(screen.ctx, `adr: ${ipAddress}`, 1, lineHeight*(1)-2);
+			font.drawText(screen.ctx, strftime("%Y-%m-%d %H:%M:%S", new Date()), 1, lineHeight*(2)-2);
 		}, 1000);
 	});
 
